@@ -1,0 +1,187 @@
+alias: Kate & Daniel - Smart Heat Pump
+description: Full heat pump control with time windows and full notifications
+triggers:
+  - entity_id: sensor.istorehws_top_tank_temperature
+    below: 47
+    for:
+      minutes: 1
+    trigger: numeric_state
+  - at: "03:00:00"
+    trigger: time
+  - at: "12:00:00"
+    trigger: time
+  - entity_id: binary_sensor.istorehws_compressor
+    to: "off"
+    for:
+      minutes: 2
+    trigger: state
+conditions:
+  - condition: or
+    conditions:
+      - condition: time
+        after: "03:00:00"
+        before: "08:00:00"
+      - condition: time
+        after: "12:00:00"
+        before: "18:30:00"
+actions:
+  - variables:
+      top_temp: "{{ states('sensor.istorehws_top_tank_temperature') | float(100) }}"
+      target_temp: 60
+      current_time: "{{ now().strftime('%-I:%M %p') }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.platform == 'time' and trigger.now().hour == 3 }}"
+        sequence:
+          - data:
+              title: iStore Schedule
+              message: 🌅 3AM heating window started. Top tank at {{ top_temp }}°C.
+            action: notify.mobile_app_PUTYOURPHONENAMEHERE
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.platform == 'time' and trigger.now().hour == 12 }}"
+        sequence:
+          - data:
+              title: iStore Schedule
+              message: ☀️ 12PM heating window started. Top tank at {{ top_temp }}°C.
+            action: notify.mobile_app_PUTYOURPHONENAMEHERE
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ top_temp < 35 }}"
+        sequence:
+          - target:
+              entity_id: switch.istorehws_heat_pump_power
+            action: switch.turn_on
+          - target:
+              entity_id: select.istorehws_booster_control
+            data:
+              option: "On"
+            action: select.select_option
+          - data:
+              title: iStore Alert
+              message: >-
+                🔥 Top tank < 35°C. Heat pump + booster turned ON ({{
+                current_time }}).
+            action: notify.mobile_app_PUTYOURPHONENAMEHERE
+      - conditions:
+          - condition: template
+            value_template: "{{ top_temp >= 35 and top_temp < 45 }}"
+        sequence:
+          - target:
+              entity_id: switch.istorehws_heat_pump_power
+            action: switch.turn_on
+          - target:
+              entity_id: select.istorehws_booster_control
+            data:
+              option: "Off"
+            action: select.select_option
+          - data:
+              title: iStore Alert
+              message: ♨️ Top tank 35–45°C. Heat pump ON ({{ current_time }}).
+            action: notify.mobile_app_PUTYOURPHONENAMEHERE
+      - conditions:
+          - condition: template
+            value_template: "{{ top_temp >= 45 and top_temp < (target_temp - 0.5) }}"
+        sequence:
+          - target:
+              entity_id: switch.istorehws_heat_pump_power
+            action: switch.turn_on
+          - target:
+              entity_id: select.istorehws_booster_control
+            data:
+              option: "Off"
+            action: select.select_option
+          - data:
+              title: iStore Alert
+              message: ♨️ Top tank 45–59.5°C. Heat pump ON ({{ current_time }}).
+            action: notify.mobile_app_PUTYOURPHONENAMEHERE
+      - conditions:
+          - condition: template
+            value_template: "{{ top_temp >= (target_temp - 0.2) }}"
+        sequence:
+          - target:
+              entity_id: select.istorehws_booster_control
+            data:
+              option: "Off"
+            action: select.select_option
+          - delay:
+              seconds: 3
+          - target:
+              entity_id: switch.istorehws_heat_pump_power
+            action: switch.turn_off
+          - data:
+              title: iStore Alert
+              message: >-
+                ✅ Target temp ({{ target_temp }}°C) reached. Heat pump + booster
+                OFF ({{ current_time }}).
+            action: notify.mobile_app_PUTYOURPHONENAMEHERE
+  - choose:
+      - conditions:
+          - condition: numeric_state
+            entity_id: sensor.istorehws_top_tank_temperature
+            below: 30
+          - condition: or
+            conditions:
+              - condition: time
+                after: "03:00:00"
+                before: "08:00:00"
+              - condition: time
+                after: "12:00:00"
+                before: "18:30:00"
+        sequence:
+          - target:
+              entity_id: select.istorehws_booster_control
+            data:
+              option: "On"
+            action: select.select_option
+          - data:
+              title: iStore Emergency Boost
+              message: 🚨 Top tank below 30°C. Booster activated for 30 minutes.
+            action: notify.mobile_app_PUTYOURPHONENAMEHERE
+          - delay:
+              minutes: 30
+          - target:
+              entity_id: select.istorehws_booster_control
+            data:
+              option: "Off"
+            action: select.select_option
+          - data:
+              title: iStore Booster Off
+              message: 🕒 Booster auto-off after 30 minutes emergency heating.
+            action: notify.mobile_app_PUTYOURPHONENAMEHERE
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ trigger.platform == 'state' and trigger.to_state.state == 'off'
+              }}
+          - condition: state
+            entity_id: switch.istorehws_heat_pump_power
+            state: "on"
+          - condition: numeric_state
+            entity_id: sensor.istorehws_top_tank_temperature
+            above: 58
+          - condition: numeric_state
+            entity_id: sensor.istorehws_top_tank_temperature
+            below: 62.5
+          - condition: or
+            conditions:
+              - condition: time
+                after: "03:00:00"
+                before: "08:00:00"
+              - condition: time
+                after: "12:00:00"
+                before: "18:30:00"
+        sequence:
+          - target:
+              entity_id: switch.istorehws_heat_pump_power
+            action: switch.turn_off
+          - data:
+              title: iStore Auto Shutdown
+              message: >-
+                ✅ Compressor OFF & tank {{
+                states('sensor.istorehws_top_tank_temperature') }}°C. Heat pump
+                safely turned OFF at {{ now().strftime('%-I:%M %p') }}.
+            action: notify.mobile_app_PUTYOURPHONENAMEHERE
